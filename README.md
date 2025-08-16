@@ -1,44 +1,286 @@
-ESPHome Project: Smart Fan Control for Recuperator
-This project uses ESPHome to control a recuperator fan, including manual speed adjustment with a rotary encoder, a timed boost mode, and a configurable day/night mode. It integrates with Home Assistant via MQTT.
+ESPHome Project: Smart Fan Control for RecuperatorThis project uses ESPHome to control a recuperator fan, including manual speed adjustment with a rotary encoder, a timed boost mode, and a configurable day/night mode. It integrates with Home Assistant via MQTT.FeaturesRotary Encoder Control: Smoothly adjust fan speed from 0 to 50.Push Button:Single Click: Turns the fan on/off.Double Click: Activates a 30-speed boost mode for a configurable duration.Automated Day/Night Mode: Automatically switches between pre-defined day and night speeds based on the time of day.MQTT Integration: All controls and statuses are available via MQTT for seamless integration with Home Assistant.OTA Updates: Allows for over-the-air firmware updates.ComponentsESP8266 (D1 Mini Lite): The microcontroller unit.Rotary Encoder: For manual fan speed control.PWM Output (D5): Controls the fan motor speed.Time Sync: Uses SNTP to get the current time for day/night mode.ESPHome Проєкт: Розумне керування вентилятором рекуператораЦей проєкт використовує ESPHome для керування вентилятором рекуператора, включаючи ручне регулювання швидкості за допомогою роторного енкодера, режим прискорення з таймером та налаштовуваний денний/нічний режим. Проєкт інтегрується з Home Assistant через MQTT.ФункціїКерування роторним енкодером: Плавне регулювання швидкості вентилятора від 0 до 50.Кнопка:Одинарне натискання: Вмикає/вимикає вентилятор.Подвійне натискання: Активує режим прискорення на швидкості 30 на налаштований час.Автоматичний денний/нічний режим: Автоматично перемикає між заздалегідь визначеними денними та нічними швидкостями в залежності від часу доби.Інтеграція з MQTT: Усі елементи керування та статуси доступні через MQTT для безшовної інтеграції з Home Assistant.OTA оновлення: Дозволяє оновлювати прошивку по повітрю.ESPHome YAML Codeesphome:
+  name: fancontrol
+  # Add a delay at startup to allow components to initialize
+  on_boot:
+    priority: -100
+    then:
+      - delay: 2s
+      - lambda: |-
+          ESP_LOGI("main", "System started successfully");
 
-Features
-Rotary Encoder Control: Smoothly adjust fan speed from 0 to 50.
+esp8266:
+  board: d1_mini_lite
+  
+api:
 
-Push Button:
+ota:
+  platform: esphome
+  password: "12345"
 
-Single Click: Turns the fan on/off.
+wifi:
+  ssid: "wifi"
+  password: "12345678"
+  ap:
+    ssid: "Fancontrol Fallback Hotspot"
+    password: "12345"
+  on_connect:
+    then:
+      - logger.log: "WiFi connected successfully"
+  on_disconnect:
+    then:
+      - logger.log: "WiFi disconnected"
 
-Double Click: Activates a 30-speed boost mode for a configurable duration.
+captive_portal:
 
-Automated Day/Night Mode: Automatically switches between pre-defined day and night speeds based on the time of day.
+logger:
+  level: INFO
+  logs:
+    mqtt: WARN
+    wifi: WARN
 
-MQTT Integration: All controls and statuses are available via MQTT for seamless integration with Home Assistant.
+web_server:
+  port: 80
 
-OTA Updates: Allows for over-the-air firmware updates.
+mqtt:
+  broker: 192.168.0.200
+  username: user
+  password: 12345
+  # Simplified command handling via MQTT
+  on_message:
+    - topic: esphome/fancontrol/fan_speed/set
+      then:
+        - number.set:
+            id: manual_fan_speed
+            value: !lambda |-
+              int speed = atoi(x.c_str());
+              return clamp(speed, 0, 50);
 
-Components
-ESP8266 (D1 Mini Lite): The microcontroller unit.
+output:
+  - platform: esp8266_pwm
+    pin: D5
+    id: fan_pwm_output
+    frequency: 25000 Hz
 
-Rotary Encoder: For manual fan speed control.
+fan:
+  - platform: speed
+    output: fan_pwm_output
+    name: "Fan Speed"
+    id: fan_speed
+    speed_count: 50
+    restore_mode: RESTORE_DEFAULT_ON
 
-PWM Output (D5): Controls the fan motor speed.
+number:
+  - platform: template
+    name: "Manual Fan Speed"
+    id: manual_fan_speed
+    min_value: 0
+    max_value: 50
+    step: 1
+    icon: mdi:fan
+    initial_value: 0
+    optimistic: true
+    set_action:
+      - lambda: |-
+          ESP_LOGI("NUMBER", "Manual speed set to: %.0f", x);
+          if (x > 0) {
+            auto call = id(fan_speed).make_call();
+            call.set_state(true);
+            call.set_speed((int)x);
+            call.perform();
+          } else {
+            auto call = id(fan_speed).make_call();
+            call.set_state(false);
+            call.perform();
+          }
+    on_value_range:
+      - below: 51
+        then:
+          - mqtt.publish:
+              topic: "esphome/fancontrol/manual_fan_speed/state"
+              payload: !lambda 'return to_string(x);'
 
-Time Sync: Uses SNTP to get the current time for day/night mode.
+  - platform: template
+    name: "Boost Mode Duration"
+    id: boost_mode_duration
+    min_value: 1
+    max_value: 60
+    step: 1
+    icon: mdi:timer-outline
+    unit_of_measurement: "min"
+    initial_value: 15
+    optimistic: true
 
-ESPHome Проєкт: Розумне керування вентилятором рекуператора
-Цей проєкт використовує ESPHome для керування вентилятором рекуператора, включаючи ручне регулювання швидкості за допомогою роторного енкодера, режим прискорення з таймером та налаштовуваний денний/нічний режим. Проєкт інтегрується з Home Assistant через MQTT.
+  - platform: template
+    name: "Night Mode Start Hour"
+    id: night_mode_start_hour
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 22
+    optimistic: true
 
-Функції
-Керування роторним енкодером: Плавне регулювання швидкості вентилятора від 0 до 50.
+  - platform: template
+    name: "Night Mode End Hour"
+    id: night_mode_end_hour
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 9
+    optimistic: true
 
-Кнопка:
+  - platform: template
+    name: "Day Mode Min Speed"
+    id: day_mode_min_speed
+    min_value: 1
+    max_value: 50
+    step: 1
+    initial_value: 45
+    optimistic: true
 
-Одинарне натискання: Вмикає/вимикає вентилятор.
+  - platform: template
+    name: "Day Mode Max Speed"
+    id: day_mode_max_speed
+    min_value: 1
+    max_value: 50
+    step: 1
+    initial_value: 50
+    optimistic: true
 
-Подвійне натискання: Активує режим прискорення на швидкості 30 на налаштований час.
+  - platform: template
+    name: "Night Mode Min Speed"
+    id: night_mode_min_speed
+    min_value: 1
+    max_value: 50
+    step: 1
+    initial_value: 30
+    optimistic: true
 
-Автоматичний денний/нічний режим: Автоматично перемикає між заздалегідь визначеними денними та нічними швидкостями в залежності від часу доби.
+  - platform: template
+    name: "Night Mode Max Speed"
+    id: night_mode_max_speed
+    min_value: 1
+    max_value: 50
+    step: 1
+    initial_value: 35
+    optimistic: true
 
-Інтеграція з MQTT: Усі елементи керування та статуси доступні через MQTT для безшовної інтеграції з Home Assistant.
+sensor:
+  - platform: rotary_encoder
+    pin_a: D6
+    pin_b: D7
+    resolution: 4
+    name: "Rotary Encoder"
+    id: rotary_encoder_sensor
+    filters:
+      - debounce: 5ms
+      - lambda: return round(x);
+    on_value:
+      then:
+        - lambda: |-
+            // Logic to handle encoder turns and adjust speed smoothly
+            static int last_encoder_value = 0;
+            int current_encoder_value = round(id(rotary_encoder_sensor).state);
+            int delta = current_encoder_value - last_encoder_value;            
+            int current_speed = id(manual_fan_speed).state;
+            
+            if (id(manual_fan_speed).has_state() == false) {
+              current_speed = id(fan_speed).speed;
+            }
+            
+            if (delta > 0) {
+              current_speed += 1;
+            } else if (delta < 0) {
+              current_speed -= 1;
+            }
+            
+            current_speed = clamp(current_speed, 0, 50);
+            
+            auto call = id(manual_fan_speed).make_call();
+            call.set_value(current_speed);
+            call.perform();
+            
+            last_encoder_value = current_encoder_value;
+        
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: D4
+      mode: INPUT_PULLUP
+      inverted: true
+    name: "Encoder Button"
+    on_multi_click:
+      - timing:
+          - ON for at most 350ms
+          - OFF for at least 50ms
+        then:
+          - if:
+              condition:
+                lambda: 'return id(fan_speed).state;'
+              then:
+                - number.set:
+                    id: manual_fan_speed
+                    value: 0
+              else:
+                - number.set:
+                    id: manual_fan_speed
+                    value: !lambda 'return id(day_mode_min_speed).state;'
+      - timing:
+          - ON for at least 1s
+          - OFF for at least 50ms
+        then:
+          - number.set:
+              id: manual_fan_speed
+              value: 30
+          - delay: !lambda 'return id(boost_mode_duration).state * 60 * 1000;'
+          - number.set:
+              id: manual_fan_speed
+              value: 0
+      - timing:
+          - ON for at most 350ms
+          - OFF for at most 350ms
+          - ON for at most 350ms
+        then:
+          - homeassistant.service:
+              service: script.fan_ventilation_boost
+
+time:
+  - platform: sntp
+    id: my_time
+
+interval:
+  - interval: 1min
+    then:
+      - if:
+          condition:
+            lambda: 'return !id(manual_fan_speed).has_state();'
+          then:
+            - number.set:
+                id: manual_fan_speed
+                value: !lambda |-
+                  auto now = id(my_time).now();
+                  if (!now.is_valid()) {
+                    ESP_LOGW("time", "Time is not valid, skipping...");
+                    return 0;
+                  }
+                  int hour = now.hour;
+                  int start_hour = id(night_mode_start_hour).state;
+                  int end_hour = id(night_mode_end_hour).state;
+                  bool is_night_mode = false;
+                  if (start_hour < end_hour) {
+                    is_night_mode = (hour >= start_hour && hour < end_hour);
+                  } else {
+                    is_night_mode = (hour >= start_hour || hour < end_hour);
+                  }
+                  
+                  if (is_night_mode) {
+                    return id(night_mode_min_speed).state;
+                  } else {
+                    return id(day_mode_min_speed).state;
+                  }
+
+switch:
+  - platform: restart
+    name: "Restart Device"
+шовної інтеграції з Home Assistant.
 
 OTA оновлення: Дозволяє оновлювати прошивку по повітрю.
